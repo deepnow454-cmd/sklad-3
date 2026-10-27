@@ -10,7 +10,12 @@ declare
   l_wh int; l_O int; l_R int; l_os int; v_inc uuid; v_inc2 uuid; v_mv bigint;
 begin
   select id into v_admin from profiles where role = 'admin' and active limit 1;
-  if v_admin is null then raise exception 'Нет активного админа в profiles'; end if;
+  if v_admin is null then
+    -- в базе нет админа: создаём временного (откатится вместе со всем остальным)
+    v_admin := gen_random_uuid();
+    insert into auth.users(id, email) values (v_admin, 'zz-test-admin@example.invalid');
+    insert into profiles(id, login, full_name, role) values (v_admin, 'zz-test-admin', 'ZZ Test Admin', 'admin');
+  end if;
   perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
 
