@@ -33,6 +33,9 @@ import type {
   NormalizedShortageEvent,
   OwnerStockRow,
   AptType,
+  IncidentCharge,
+  IncidentChargePreview,
+  ChargeStatus,
 } from '@/lib/database.types'
 
 // ---- Queries ----
@@ -799,18 +802,68 @@ export async function approveIncident(
   decision: 'confirm' | 'reject',
   note: string | null,
   force: boolean,
+  charge?: { tenantNote?: string | null; baseCost?: number | null; coef?: number | null } | null,
 ): Promise<ApproveIncidentResult> {
-  const { data, error, status } = await supabase.rpc('approve_incident', {
+  const params: Record<string, unknown> = {
     p_incident: incidentId,
     p_decision: decision,
     p_note: note,
     p_force: force,
-  })
+  }
+  if (charge != null) {
+    const pCharge: Record<string, unknown> = {}
+    if (charge.tenantNote != null) pCharge.tenant_note = charge.tenantNote
+    if (charge.baseCost != null) pCharge.base_cost = charge.baseCost
+    if (charge.coef != null) pCharge.coef = charge.coef
+    params.p_charge = pCharge
+  }
+  const { data, error, status } = await supabase.rpc('approve_incident', params)
   if (error) throw toApiError(error, status)
   return data as ApproveIncidentResult
 }
 
-// ---- Cleanings waiting for admin confirmation ----
+export async function fetchIncidentChargePreview(incidentId: string): Promise<IncidentChargePreview> {
+  const { data, error, status } = await supabase.rpc('incident_charge_preview', { p_incident: incidentId })
+  if (error) throw toApiError(error, status)
+  const raw = data as Record<string, unknown>
+  return {
+    qty: raw.qty != null ? Number(raw.qty) : null,
+    item_id: raw.item_id != null ? Number(raw.item_id) : null,
+    base_cost: raw.base_cost != null ? Number(raw.base_cost) : null,
+    base_source: (raw.base_source as 'company' | 'owner' | null) ?? null,
+    coef: raw.coef != null ? Number(raw.coef) : null,
+    coef_source: (raw.coef_source as 'item' | 'category' | null) ?? null,
+  }
+}
+
+export async function fetchIncidentCharges(): Promise<IncidentCharge[]> {
+  const rows = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('incident_charges')
+      .select('incident_id,tenant_note,base_cost,base_source,coef,amount,status,created_at,status_changed_at')
+      .order('created_at', { ascending: false })
+      .range(from, to),
+  )
+  return rows.map((r) => ({
+    incident_id: String(r.incident_id),
+    tenant_note: (r.tenant_note as string | null) ?? null,
+    base_cost: Number(r.base_cost),
+    base_source: r.base_source as 'company' | 'owner' | 'manual',
+    coef: Number(r.coef),
+    amount: Number(r.amount),
+    status: r.status as ChargeStatus,
+    created_at: String(r.created_at),
+    status_changed_at: (r.status_changed_at as string | null) ?? null,
+  }))
+}
+
+export async function setIncidentChargeStatus(incidentId: string, status: ChargeStatus): Promise<void> {
+  const { error, status: httpStatus } = await supabase.rpc('set_incident_charge_status', {
+    p_incident: incidentId,
+    p_status: status,
+  })
+  if (error) throw toApiError(error, httpStatus)
+}
 
 export interface PendingCleaning {
   id: string

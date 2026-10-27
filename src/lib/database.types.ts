@@ -9,6 +9,28 @@ export type NormType = 'asset_standing' | 'turnover_replenish' | 'cleaning_consu
 export type EventStatus = 'done' | 'reversed'
 export type IncidentKind = 'breakdown' | 'broken' | 'lost' | 'damaged' | 'other'
 export type IncidentStatus = 'new' | 'in_progress' | 'confirmed' | 'rejected'
+export type ChargeStatus = 'pending' | 'paid' | 'waived'
+
+export interface IncidentCharge {
+  incident_id: string
+  tenant_note: string | null
+  base_cost: number
+  base_source: 'company' | 'owner' | 'manual'
+  coef: number
+  amount: number
+  status: ChargeStatus
+  created_at: string
+  status_changed_at: string | null
+}
+
+export interface IncidentChargePreview {
+  qty: number | null
+  item_id: number | null
+  base_cost: number | null
+  base_source: 'company' | 'owner' | null
+  coef: number | null
+  coef_source: 'item' | 'category' | null
+}
 export type DocType = 'receipt' | 'issue' | 'writeoff' | 'inventory'
 export type DocStatus = 'draft' | 'posted' | 'void'
 
