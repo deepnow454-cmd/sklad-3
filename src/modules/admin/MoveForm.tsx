@@ -1,13 +1,13 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { fetchWarehouseStock, fetchApartmentsAdmin, fetchAllStaff, fetchSuppliers, fetchItems, postDocument, postTransfer } from '@/modules/admin/api'
-import type { WarehouseStockRow, Apartment, Staff, Supplier, PostDocumentResult } from '@/lib/database.types'
+import { fetchWarehouseStock, fetchApartmentsAdmin, fetchAllStaff, fetchSuppliers, fetchItems, fetchOwnerStock, postDocument, postTransfer } from '@/modules/admin/api'
+import type { WarehouseStockRow, Apartment, Staff, Supplier, PostDocumentResult, OwnerStockRow, ItemKind } from '@/lib/database.types'
 import { useI18n } from '@/i18n'
 import { formatQty } from '@/lib/format'
 import { toast, errorMessage } from '@/lib/toast'
-import { Plus, Minus, Trash2, Loader as Loader2, Check, X, FileText, TriangleAlert as AlertTriangle } from 'lucide-react'
+import { lineSource, isTransferBlocked, buildOwnerStockMap, ownerAvailable, type MoveOp } from '@/modules/admin/moveRules'
+import { Plus, Minus, Trash2, Loader as Loader2, Check, X, FileText, TriangleAlert as AlertTriangle, Info } from 'lucide-react'
 
-// локальная дата YYYY-MM-DD (не UTC), чтобы около полуночи «сегодня» не съезжало
 function localToday(): string {
   const d = new Date()
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
@@ -29,11 +29,14 @@ interface CartLine {
   packSize: number
   packLabel: string
   baseUnit: string
+  kind: ItemKind
   stockQty: number | null
   qty: string
   unitMode: 'packs' | 'base'
   unitCost: string
 }
+
+type OwnershipMode = 'company' | 'owner'
 
 export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { t, n } = useI18n()
@@ -52,6 +55,7 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
     { op: 'transfer_holder', label: t.admin.move.transferHolder, needsApartment: true, needsStaff: true, needsCost: false },
   ]
   const [stock, setStock] = useState<WarehouseStockRow[]>([])
+  const [ownerStock, setOwnerStock] = useState<OwnerStockRow[]>([])
   const [apartments, setApartments] = useState<Apartment[]>([])
   const [staffList, setStaffList] = useState<Staff[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
@@ -68,15 +72,19 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
   const [search, setSearch] = useState('')
   const [posting, setPosting] = useState(false)
   const [result, setResult] = useState<PostDocumentResult | null>(null)
+  const [ownership, setOwnership] = useState<OwnershipMode>('company')
+  const [ownerAptId, setOwnerAptId] = useState<number | null>(null)
+  const [placeInApartment, setPlaceInApartment] = useState(false)
 
   useEffect(() => {
-    Promise.all([fetchWarehouseStock(), fetchApartmentsAdmin(), fetchAllStaff(), fetchSuppliers(), fetchItems()])
-      .then(([s, a, st, sup, its]) => {
+    Promise.all([fetchWarehouseStock(), fetchApartmentsAdmin(), fetchAllStaff(), fetchSuppliers(), fetchItems(), fetchOwnerStock()])
+      .then(([s, a, st, sup, its, os]) => {
         setStock(s)
         setItemMeta(new Map(its.map((i) => [i.id, { cost: i.default_cost, supplier: i.supplier_id }])))
         setApartments(a)
         setStaffList(st.filter((x) => x.active))
         setSuppliers(sup)
+        setOwnerStock(os)
       })
       .catch((e) => toast(errorMessage(e), 'error'))
       .finally(() => setLoading(false))
@@ -84,14 +92,28 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
 
   const opDef = ops.find((o) => o.op === op)!
   const stockMap = useMemo(() => new Map(stock.map((s) => [s.item_id, s.qty])), [stock])
-  const filteredStock = useMemo(
-    () => stock.filter((s) => s.name.toLowerCase().includes(search.toLowerCase().trim())).slice(0, 20),
-    [stock, search],
-  )
+  const ownerStockMap = useMemo(() => buildOwnerStockMap(ownerStock), [ownerStock])
 
-  // предупреждение «не хватает» относится только к операциям, которые берут товар со склада
+  const ownerApartments = useMemo(() => apartments.filter((a) => a.is_owner), [apartments])
+  const selectedApt = useMemo(() => apartments.find((a) => a.id === apartmentId) ?? null, [apartments, apartmentId])
+  const selectedAptIsOwner = selectedApt?.is_owner ?? false
+  const toApt = useMemo(() => apartments.find((a) => a.id === toApartmentId) ?? null, [apartments, toApartmentId])
+
   const isOutbound = op === 'issue_apartment' || op === 'writeoff_warehouse' || op === 'issue_holder'
   const isTransfer = op === 'transfer_apartment' || op === 'transfer_holder'
+  const showOwnershipToggle = op === 'receipt' || op === 'writeoff_warehouse'
+  const showOwnerAptInfo = (op === 'issue_apartment' || op === 'return_apartment') && selectedAptIsOwner
+
+  const filteredStock = useMemo(() => {
+    let list = stock.filter((s) => s.name.toLowerCase().includes(search.toLowerCase().trim()))
+    if (showOwnershipToggle && ownership === 'owner') {
+      list = list.filter((s) => s.kind === 'asset')
+    }
+    if (op === 'writeoff_warehouse' && ownership === 'owner') {
+      list = list.filter((s) => ownerAvailable(ownerStockMap, ownerAptId ?? -1, s.item_id) > 0)
+    }
+    return list.slice(0, 20)
+  }, [stock, search, showOwnershipToggle, ownership, op, ownerStockMap, ownerAptId])
 
   const addToCart = (item: WarehouseStockRow) => {
     const meta = itemMeta.get(item.item_id)
@@ -104,6 +126,7 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
         packSize: item.pack_size,
         packLabel: item.pack_label,
         baseUnit: item.base_unit,
+        kind: item.kind,
         stockQty: item.qty,
         qty: '1',
         unitMode: item.pack_size > 1 ? 'packs' : 'base',
@@ -126,6 +149,58 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
     return qtyNum
   }
 
+  const effectiveStockQty = useCallback((line: CartLine): number | null => {
+    if (isTransfer) return null
+    if (op === 'writeoff_warehouse' && ownership === 'owner') {
+      return ownerAvailable(ownerStockMap, ownerAptId ?? -1, line.itemId)
+    }
+    if ((op === 'issue_apartment' || op === 'return_apartment') && selectedAptIsOwner) {
+      const src = lineSource(op as MoveOp, true, line.kind)
+      if (src === 'owner') return ownerAvailable(ownerStockMap, apartmentId ?? -1, line.itemId)
+      return line.stockQty ?? stockMap.get(line.itemId) ?? null
+    }
+    return line.stockQty ?? stockMap.get(line.itemId) ?? null
+  }, [isTransfer, op, ownership, ownerStockMap, ownerAptId, selectedAptIsOwner, apartmentId, stockMap])
+
+  const transferBlocked = useCallback((line: CartLine): boolean => {
+    if (!isTransfer) return false
+    const fromOwner = op === 'transfer_holder' ? false : selectedAptIsOwner
+    const toOwner = toApt?.is_owner ?? false
+    return isTransferBlocked(line.kind, fromOwner, toOwner)
+  }, [isTransfer, op, selectedAptIsOwner, toApt])
+
+  const hasBlockedTransfer = cart.some(transferBlocked)
+
+  const handleOpChange = (nextOp: string) => {
+    if (cart.length > 0) {
+      const nextDef = ops.find((o) => o.op === nextOp)!
+      const invalid: string[] = []
+      for (const line of cart) {
+        if (nextDef.op === 'receipt' || nextDef.op === 'writeoff_warehouse') {
+          if (ownership === 'owner' && line.kind === 'consumable') invalid.push(line.itemName)
+        }
+      }
+      if (invalid.length > 0) {
+        toast(t.admin.move.linesBecameInvalid + ': ' + invalid.join(', '), 'error')
+      }
+    }
+    setOp(nextOp)
+  }
+
+  const handleOwnershipChange = (next: OwnershipMode) => {
+    if (next === 'owner' && cart.length > 0) {
+      const consumables = cart.filter((l) => l.kind === 'consumable')
+      if (consumables.length > 0) {
+        toast(t.admin.move.ownerConsumablesHidden + ' (' + consumables.map((l) => l.itemName).join(', ') + ')', 'error')
+      }
+    }
+    setOwnership(next)
+  }
+
+  const handleApartmentChange = (id: number | null) => {
+    setApartmentId(id)
+  }
+
   const handlePost = async () => {
     if (posting) return
     if (cart.length === 0) {
@@ -140,6 +215,10 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
       toast(t.admin.move.staff, 'error')
       return
     }
+    if (showOwnershipToggle && ownership === 'owner' && !ownerAptId) {
+      toast(t.admin.move.ownerApartmentRequired, 'error')
+      return
+    }
     if (opDef.needsToApartment) {
       if (!toApartmentId) {
         toast(t.admin.move.toApartment, 'error')
@@ -149,6 +228,10 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
         toast(t.admin.move.sameApartment, 'error')
         return
       }
+    }
+    if (hasBlockedTransfer) {
+      toast(t.admin.move.transferBlocked, 'error')
+      return
     }
     const lines = cart
       .map((line) => {
@@ -166,6 +249,9 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
     setPosting(true)
     try {
       const docDateArg = docDate && docDate !== localToday() ? docDate : null
+      const isOwnerMode = showOwnershipToggle && ownership === 'owner'
+      const ownerAptArg = isOwnerMode ? ownerAptId : null
+      const placeInApt = isOwnerMode && op === 'receipt' && placeInApartment
       const res = isTransfer
         ? await postTransfer({
             fromKind: op === 'transfer_holder' ? 'holder' : 'apartment',
@@ -178,11 +264,12 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
         : await postDocument({
             op,
             lines,
-            apartment: opDef.needsApartment ? apartmentId : null,
+            apartment: placeInApt ? ownerAptArg : (opDef.needsApartment ? apartmentId : null),
             staff: opDef.needsStaff ? staffId : null,
             supplier: opDef.needsCost ? supplierId : null,
             note: note.trim() || null,
             doc_date: docDateArg,
+            ownerApartment: ownerAptArg,
           })
       setResult(res)
     } catch (e) {
@@ -263,7 +350,7 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
               {ops.map((o) => (
                 <button
                   key={o.op}
-                  onClick={() => setOp(o.op)}
+                  onClick={() => handleOpChange(o.op)}
                   className={`rounded-full px-3.5 py-1.5 text-sm transition-colors border ${
                     op === o.op ? 'bg-accent border-accent text-white' : 'bg-surface border-line text-muted'
                   }`}
@@ -274,6 +361,66 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
             </div>
           </div>
 
+          {/* Ownership toggle (receipt / writeoff_warehouse) */}
+          {showOwnershipToggle && (
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1.5">{t.admin.move.ownership}</label>
+              <div className="inline-flex bg-app border border-line rounded-lg p-0.5">
+                <button
+                  onClick={() => handleOwnershipChange('company')}
+                  className={`px-4 py-2 rounded-md text-sm transition-colors ${ownership === 'company' ? 'bg-accent text-white' : 'text-muted'}`}
+                >
+                  {t.admin.move.ownershipCompany}
+                </button>
+                <button
+                  onClick={() => handleOwnershipChange('owner')}
+                  className={`px-4 py-2 rounded-md text-sm transition-colors ${ownership === 'owner' ? 'bg-accent text-white' : 'text-muted'}`}
+                >
+                  {t.admin.move.ownershipOwner}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Owner apartment selector */}
+          {showOwnershipToggle && ownership === 'owner' && (
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1.5">{t.admin.move.ownerApartment}</label>
+              <select
+                value={ownerAptId ?? ''}
+                onChange={(e) => setOwnerAptId(e.target.value ? Number(e.target.value) : null)}
+                className="w-full bg-surface rounded-lg px-4 py-2.5 text-sm border border-line focus:border-accent focus:outline-none"
+              >
+                <option value="">—</option>
+                {ownerApartments.map((a) => (
+                  <option key={a.id} value={a.id}>{a.code}</option>
+                ))}
+              </select>
+              {op === 'receipt' && (
+                <label className="flex items-center gap-2 mt-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={placeInApartment}
+                    onChange={(e) => setPlaceInApartment(e.target.checked)}
+                    className="w-4 h-4 rounded accent-accent"
+                  />
+                  <span className="text-sm text-ink">{t.admin.move.ownerPlaceInApartment}</span>
+                </label>
+              )}
+              {op === 'receipt' && (
+                <p className="text-xs text-muted mt-1.5">{t.admin.move.ownerConsumablesHidden}</p>
+              )}
+            </div>
+          )}
+
+          {/* Owner apartment info banner (issue_apartment / return_apartment) */}
+          {showOwnerAptInfo && (
+            <div className="flex items-start gap-2 bg-warn-soft text-warn rounded-lg px-3 py-2.5 text-xs">
+              <Info className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{t.admin.move.ownerAptInfo}</span>
+            </div>
+          )}
+
           {/* Apartment */}
           {opDef.needsApartment && (
             <div>
@@ -282,12 +429,12 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
               </label>
               <select
                 value={apartmentId ?? ''}
-                onChange={(e) => setApartmentId(e.target.value ? Number(e.target.value) : null)}
+                onChange={(e) => handleApartmentChange(e.target.value ? Number(e.target.value) : null)}
                 className="w-full bg-surface rounded-lg px-4 py-2.5 text-sm border border-line focus:border-accent focus:outline-none"
               >
                 <option value="">—</option>
                 {apartments.map((a) => (
-                  <option key={a.id} value={a.id}>{a.code}</option>
+                  <option key={a.id} value={a.id}>{a.code}{a.is_owner ? ' (OWNER)' : ''}</option>
                 ))}
               </select>
             </div>
@@ -303,7 +450,7 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
               >
                 <option value="">—</option>
                 {apartments.filter((a) => a.id !== apartmentId).map((a) => (
-                  <option key={a.id} value={a.id}>{a.code}</option>
+                  <option key={a.id} value={a.id}>{a.code}{a.is_owner ? ' (OWNER)' : ''}</option>
                 ))}
               </select>
             </div>
@@ -357,16 +504,21 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
                 {filteredStock.length === 0 && (
                   <p className="px-4 py-2.5 text-sm text-muted">{t.common.noResults}</p>
                 )}
-                {filteredStock.map((s) => (
-                  <button
-                    key={s.item_id}
-                    onClick={() => { addToCart(s); setSearch('') }}
-                    className="w-full px-4 py-2.5 flex items-center justify-between text-left hover:bg-app border-b border-line last:border-0"
-                  >
-                    <span className="text-sm text-ink truncate">{s.name}</span>
-                    <span className="text-xs text-muted shrink-0 ml-2">{n(formatQty(s.qty, s))}</span>
-                  </button>
-                ))}
+                {filteredStock.map((s) => {
+                  const availLabel = op === 'writeoff_warehouse' && ownership === 'owner' && ownerAptId
+                    ? ownerAvailable(ownerStockMap, ownerAptId, s.item_id)
+                    : s.qty
+                  return (
+                    <button
+                      key={s.item_id}
+                      onClick={() => { addToCart(s); setSearch('') }}
+                      className="w-full px-4 py-2.5 flex items-center justify-between text-start hover:bg-app border-b border-line last:border-0"
+                    >
+                      <span className="text-sm text-ink truncate">{s.name}</span>
+                      <span className="text-xs text-muted shrink-0 ms-2">{n(formatQty(availLabel, s))}</span>
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -376,8 +528,12 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
             <div className="space-y-2">
               {cart.map((line, idx) => {
                 const baseQty = getBaseQty(line)
-                const stockQty = line.stockQty ?? stockMap.get(line.itemId) ?? null
+                const stockQty = effectiveStockQty(line)
                 const overStock = isOutbound && stockQty !== null && baseQty > stockQty
+                const blocked = transferBlocked(line)
+                const src = (op === 'issue_apartment' || op === 'return_apartment') && selectedAptIsOwner
+                  ? lineSource(op as MoveOp, true, line.kind)
+                  : null
                 const unitLabel = line.unitMode === 'packs' ? line.packLabel : t.common.units[line.baseUnit as keyof typeof t.common.units] ?? line.baseUnit
                 return (
                   <div key={line.itemId} className="bg-surface rounded-lg border border-line px-3 py-3">
@@ -392,10 +548,24 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
                         {t.admin.move.inStock}: {n(formatQty(stockQty, { base_unit: line.baseUnit as WarehouseStockRow['base_unit'], pack_size: line.packSize, pack_label: line.packLabel }))}
                       </p>
                     )}
+                    {src && (
+                      <p className="text-xs text-muted mb-2">
+                        {src === 'owner'
+                          ? (op === 'issue_apartment' ? t.admin.move.sourceOwner : t.admin.move.sourceOwnerTo)
+                          : t.admin.move.sourceCompany}
+                      </p>
+                    )}
                     {overStock && (
                       <div className="flex items-center gap-1.5 text-xs text-bad mb-2 bg-bad-soft rounded-lg px-2.5 py-1.5">
                         <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                        {t.admin.move.overStock}
+                        {ownership === 'owner' && (op === 'writeoff_warehouse' || src === 'owner')
+                          ? t.admin.move.ownerNoStock
+                          : t.admin.move.overStock}
+                      </div>
+                    )}
+                    {blocked && (
+                      <div className="text-xs text-bad mb-2 bg-bad-soft rounded-lg px-2.5 py-1.5">
+                        {t.admin.move.transferBlocked}
                       </div>
                     )}
                     {line.packSize > 1 && (
@@ -440,7 +610,7 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
                       </div>
                       <span className="text-xs text-muted">{unitLabel}</span>
                       {line.packSize > 1 && line.unitMode === 'packs' && (
-                        <span className="text-xs text-muted ml-auto">= {n(String(baseQty))} {t.common.units[line.baseUnit as keyof typeof t.common.units] ?? line.baseUnit}</span>
+                        <span className="text-xs text-muted ms-auto">= {n(String(baseQty))} {t.common.units[line.baseUnit as keyof typeof t.common.units] ?? line.baseUnit}</span>
                       )}
                       {opDef.needsCost && (
                         <input
@@ -507,7 +677,7 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
           </button>
           <button
             onClick={handlePost}
-            disabled={posting || cart.length === 0}
+            disabled={posting || cart.length === 0 || hasBlockedTransfer}
             className="flex-1 bg-accent text-white rounded-lg py-3 font-medium text-sm disabled:opacity-40 flex items-center justify-center gap-2"
           >
             {posting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
