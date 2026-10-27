@@ -5,7 +5,7 @@ import type { WarehouseStockRow, Apartment, Staff, Supplier, PostDocumentResult,
 import { useI18n } from '@/i18n'
 import { formatQty } from '@/lib/format'
 import { toast, errorMessage } from '@/lib/toast'
-import { lineSource, isTransferBlocked, buildOwnerStockMap, ownerAvailable, type MoveOp } from '@/modules/admin/moveRules'
+import { lineSource, isTransferBlocked, transferOwnerFlags, buildOwnerStockMap, ownerAvailable, type MoveOp } from '@/modules/admin/moveRules'
 import { Plus, Minus, Trash2, Loader as Loader2, Check, X, FileText, TriangleAlert as AlertTriangle, Info } from 'lucide-react'
 
 function localToday(): string {
@@ -164,12 +164,20 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
 
   const transferBlocked = useCallback((line: CartLine): boolean => {
     if (!isTransfer) return false
-    const fromOwner = op === 'transfer_holder' ? false : selectedAptIsOwner
-    const toOwner = toApt?.is_owner ?? false
+    const { fromOwner, toOwner } = transferOwnerFlags(
+      op as 'transfer_apartment' | 'transfer_holder',
+      selectedAptIsOwner,
+      toApt?.is_owner ?? false,
+    )
     return isTransferBlocked(line.kind, fromOwner, toOwner)
   }, [isTransfer, op, selectedAptIsOwner, toApt])
 
   const hasBlockedTransfer = cart.some(transferBlocked)
+
+  // в режиме «Собственник» расходники недопустимы: показываем это на строке и не даём провести документ
+  const ownerModeActive = showOwnershipToggle && ownership === 'owner'
+  const ownerConsumableLine = useCallback((line: CartLine): boolean => ownerModeActive && line.kind === 'consumable', [ownerModeActive])
+  const hasOwnerConsumable = cart.some(ownerConsumableLine)
 
   const handleOpChange = (nextOp: string) => {
     if (cart.length > 0) {
@@ -231,6 +239,10 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
     }
     if (hasBlockedTransfer) {
       toast(t.admin.move.transferBlocked, 'error')
+      return
+    }
+    if (hasOwnerConsumable) {
+      toast(t.admin.move.ownerConsumablesHidden, 'error')
       return
     }
     const lines = cart
@@ -568,6 +580,11 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
                         {t.admin.move.transferBlocked}
                       </div>
                     )}
+                    {ownerConsumableLine(line) && (
+                      <div className="text-xs text-bad mb-2 bg-bad-soft rounded-lg px-2.5 py-1.5">
+                        {t.admin.move.ownerConsumablesHidden}
+                      </div>
+                    )}
                     {line.packSize > 1 && (
                       <div className="flex gap-1 mb-2">
                         <button
@@ -677,7 +694,7 @@ export function MoveModal({ onClose, onDone }: { onClose: () => void; onDone: ()
           </button>
           <button
             onClick={handlePost}
-            disabled={posting || cart.length === 0 || hasBlockedTransfer}
+            disabled={posting || cart.length === 0 || hasBlockedTransfer || hasOwnerConsumable}
             className="flex-1 bg-accent text-white rounded-lg py-3 font-medium text-sm disabled:opacity-40 flex items-center justify-center gap-2"
           >
             {posting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}

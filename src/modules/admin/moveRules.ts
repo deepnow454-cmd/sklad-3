@@ -69,3 +69,17 @@ export function buildOwnerStockMap(rows: OwnerStockRow[]): Map<string, number> {
   }
   return map
 }
+
+/**
+ * Which ends of a transfer are owner apartments.
+ * transfer_apartment: from = selected apartment, to = target apartment.
+ * transfer_holder: staff holder -> selected apartment (the holder's stock is company stock).
+ */
+export function transferOwnerFlags(
+  op: 'transfer_apartment' | 'transfer_holder',
+  selectedAptIsOwner: boolean,
+  toAptIsOwner: boolean,
+): { fromOwner: boolean; toOwner: boolean } {
+  if (op === 'transfer_holder') return { fromOwner: false, toOwner: selectedAptIsOwner }
+  return { fromOwner: selectedAptIsOwner, toOwner: toAptIsOwner }
+}

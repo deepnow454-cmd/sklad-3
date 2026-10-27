@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { lineSource, isTransferBlocked, ownerAvailable, buildOwnerStockMap } from './moveRules'
+import { lineSource, isTransferBlocked, ownerAvailable, buildOwnerStockMap, transferOwnerFlags } from './moveRules'
 import type { OwnerStockRow } from '@/lib/database.types'
 
 describe('lineSource', () => {
@@ -88,5 +88,29 @@ describe('buildOwnerStockMap', () => {
   it('handles empty array', () => {
     const map = buildOwnerStockMap([])
     expect(map.size).toBe(0)
+  })
+})
+
+describe('transferOwnerFlags', () => {
+  it('transfer_holder: destination is the selected apartment, holder is never owner', () => {
+    const f = transferOwnerFlags('transfer_holder', true, false)
+    expect(f).toEqual({ fromOwner: false, toOwner: true })
+    expect(isTransferBlocked('asset', f.fromOwner, f.toOwner)).toBe(true)
+  })
+
+  it('transfer_holder to a regular apartment is not blocked', () => {
+    const f = transferOwnerFlags('transfer_holder', false, true)
+    expect(f).toEqual({ fromOwner: false, toOwner: false })
+    expect(isTransferBlocked('asset', f.fromOwner, f.toOwner)).toBe(false)
+  })
+
+  it('transfer_apartment uses selected as source and target as destination', () => {
+    expect(transferOwnerFlags('transfer_apartment', true, false)).toEqual({ fromOwner: true, toOwner: false })
+    expect(transferOwnerFlags('transfer_apartment', false, true)).toEqual({ fromOwner: false, toOwner: true })
+  })
+
+  it('consumables are never blocked even into an owner apartment', () => {
+    const f = transferOwnerFlags('transfer_holder', true, false)
+    expect(isTransferBlocked('consumable', f.fromOwner, f.toOwner)).toBe(false)
   })
 })
