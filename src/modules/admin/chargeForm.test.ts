@@ -40,13 +40,13 @@ describe('buildChargePayload', () => {
 
   it('returns null when billable is off', () => {
     const state: ChargeFormState = { ...initChargeState('lost'), billable: false }
-    expect(buildChargePayload(state, preview)).toBeNull()
+    expect(buildChargePayload(state)).toBeNull()
   })
 
   it('sends only tenant_note when nothing was edited', () => {
     const state = applyPreview(initChargeState('lost'), preview)
     state.tenantNote = 'John'
-    const payload = buildChargePayload(state, preview)
+    const payload = buildChargePayload(state)
     expect(payload).toEqual({ tenant_note: 'John' })
   })
 
@@ -54,7 +54,7 @@ describe('buildChargePayload', () => {
     const state = applyPreview(initChargeState('lost'), preview)
     state.baseCost = '200'
     state.baseCostDirty = true
-    const payload = buildChargePayload(state, preview)
+    const payload = buildChargePayload(state)
     expect(payload).toEqual({ tenant_note: null, base_cost: 200 })
   })
 
@@ -62,7 +62,7 @@ describe('buildChargePayload', () => {
     const state = applyPreview(initChargeState('lost'), preview)
     state.coef = '2'
     state.coefDirty = true
-    const payload = buildChargePayload(state, preview)
+    const payload = buildChargePayload(state)
     expect(payload).toEqual({ tenant_note: null, coef: 2 })
   })
 
@@ -72,14 +72,14 @@ describe('buildChargePayload', () => {
     state.coef = '3'
     state.baseCostDirty = true
     state.coefDirty = true
-    const payload = buildChargePayload(state, preview)
+    const payload = buildChargePayload(state)
     expect(payload).toEqual({ tenant_note: null, base_cost: 50, coef: 3 })
   })
 
   it('trims tenant_note to null when empty', () => {
     const state = applyPreview(initChargeState('lost'), preview)
     state.tenantNote = '   '
-    const payload = buildChargePayload(state, preview)
+    const payload = buildChargePayload(state)
     expect(payload).toEqual({ tenant_note: null })
   })
 })
@@ -190,5 +190,28 @@ describe('computeAmount', () => {
       coef: '0',
     }
     expect(computeAmount(state, 1)).toBeNull()
+  })
+})
+
+describe('applyPreview keeps manual input', () => {
+  const preview = { qty: 1, item_id: 5, base_cost: 100, base_source: 'company' as const, coef: 1.5, coef_source: 'item' as const }
+
+  it('does not overwrite a manually entered base cost', () => {
+    const state = { ...initChargeState('lost'), baseCost: '77', baseCostDirty: true }
+    const next = applyPreview(state, preview)
+    expect(next.baseCost).toBe('77')
+    expect(next.coef).toBe('1.5')
+  })
+
+  it('does not overwrite a manually entered coefficient', () => {
+    const state = { ...initChargeState('lost'), coef: '2', coefDirty: true }
+    const next = applyPreview(state, preview)
+    expect(next.coef).toBe('2')
+    expect(next.baseCost).toBe('100')
+  })
+
+  it('keeps the billable toggle chosen by the admin', () => {
+    const state = { ...initChargeState('lost'), billable: false }
+    expect(applyPreview(state, preview).billable).toBe(false)
   })
 })

@@ -28,10 +28,11 @@ export function initChargeState(kind: IncidentKind): ChargeFormState {
 
 export function applyPreview(state: ChargeFormState, preview: IncidentChargePreview | null): ChargeFormState {
   if (!preview) return state
+  // значения, которые админ уже ввёл руками, превью не перезаписывает
   return {
     ...state,
-    baseCost: preview.base_cost != null ? String(preview.base_cost) : '',
-    coef: preview.coef != null ? String(preview.coef) : '',
+    baseCost: state.baseCostDirty ? state.baseCost : (preview.base_cost != null ? String(preview.base_cost) : ''),
+    coef: state.coefDirty ? state.coef : (preview.coef != null ? String(preview.coef) : ''),
   }
 }
 
@@ -41,10 +42,7 @@ export interface ChargePayload {
   coef?: number
 }
 
-export function buildChargePayload(
-  state: ChargeFormState,
-  preview: IncidentChargePreview | null,
-): ChargePayload | null {
+export function buildChargePayload(state: ChargeFormState): ChargePayload | null {
   if (!state.billable) return null
   const payload: ChargePayload = {
     tenant_note: state.tenantNote.trim() || null,

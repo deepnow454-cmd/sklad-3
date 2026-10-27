@@ -80,7 +80,7 @@ export function AdminIncidents() {
       .finally(() => { if (!quiet) setLoading(false) })
     fetchIncidentCharges()
       .then((chs) => setCharges(new Map(chs.map((c) => [c.incident_id, c]))))
-      .catch(() => toast(t.admin.adminIncidents.chargesLoadError, 'error'))
+      .catch(() => { if (!quiet) toast(t.admin.adminIncidents.chargesLoadError, 'error') })
   }
 
   useEffect(() => {
@@ -106,8 +106,10 @@ export function AdminIncidents() {
       setChargeState(null)
       setChargePreview(null)
       setChargeError(null)
+      setChargeLoading(false)
       return
     }
+    let cancelled = false
     const inc = actionIncident.incident
     const state = initChargeState(inc.kind)
     setChargeState(state)
@@ -117,11 +119,14 @@ export function AdminIncidents() {
     setChargeLoading(true)
     fetchIncidentChargePreview(inc.id)
       .then((preview) => {
+        if (cancelled) return
         setChargePreview(preview)
-        setChargeState(applyPreview(state, preview))
+        setChargeState((prev) => (prev ? applyPreview(prev, preview) : prev))
       })
-      .catch((e) => setChargeError(errorMessage(e)))
-      .finally(() => setChargeLoading(false))
+      .catch((e) => { if (!cancelled) setChargeError(errorMessage(e)) })
+      .finally(() => { if (!cancelled) setChargeLoading(false) })
+    // ответ по закрытой или другой заявке не должен попадать в текущий диалог
+    return () => { cancelled = true }
   }, [actionIncident])
 
   const handleAction = async () => {
@@ -129,7 +134,7 @@ export function AdminIncidents() {
     setProcessing(true)
     try {
       const charge = chargeState?.billable
-        ? buildChargePayload(chargeState, chargePreview)
+        ? buildChargePayload(chargeState)
         : null
       await approveIncident(
         actionIncident.incident.id,

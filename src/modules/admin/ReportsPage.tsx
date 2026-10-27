@@ -79,6 +79,7 @@ export function ReportsPage() {
   const [moves, setMoves] = useState<ReportStockMoveRow[]>([])
   const [stock, setStock] = useState<WarehouseStockRow[]>([])
   const [charges, setCharges] = useState<ChargesReportRow[]>([])
+  const [chargesError, setChargesError] = useState<string | null>(null)
   const [currency, setCurrency] = useState('EGP')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -100,11 +101,13 @@ export function ReportsPage() {
     if (!quiet) { setLoading(true); setError(null) }
     const fromISO = cairoLocalToISO(`${current.from}T00:00`)!
     const toISO = cairoLocalToISO(`${current.to}T00:00`)!
+    let chargesFailed: string | null = null
     Promise.all([
       fetchReportStockMoves(fromISO, toISO),
       fetchReportWarehouseStock(),
       supabase.from('settings').select('value').eq('key', 'currency').maybeSingle(),
-      fetchChargesReport(fromISO, toISO).catch(() => [] as ChargesReportRow[]),
+      // ошибка начислений не должна ронять остальные отчёты, но и выглядеть как «начислений нет» не должна
+      fetchChargesReport(fromISO, toISO).catch((e: unknown) => { chargesFailed = errorMessage(e); return [] as ChargesReportRow[] }),
     ])
       .then(([nextMoves, nextStock, settingResult, nextCharges]) => {
         if (id !== requestId.current) return
@@ -114,6 +117,7 @@ export function ReportsPage() {
         setMoves(nextMoves)
         setStock(nextStock)
         setCharges(nextCharges)
+        setChargesError(chargesFailed)
         setCurrency(typeof configured === 'string' && configured.length === 3 ? configured : 'EGP')
       })
       .catch((e: unknown) => {
@@ -239,6 +243,7 @@ export function ReportsPage() {
             <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><Th>{t.admin.reports.date}</Th><Th>{t.admin.reports.item}</Th><Th>{t.admin.reports.apartment}</Th><Th>{t.admin.reports.sourceType}</Th><Th>{t.admin.reports.qty}</Th><Th>{t.admin.reports.unitCost}</Th></tr></thead><tbody>{filteredMoves.map((move) => <tr key={move.id} className="border-t border-line"><Td>{formatDateTime(move.moved_at)}</Td><Td>{move.item_name}</Td><Td>{move.apartment_code ?? '—'}{move.owner_apartment_id != null && <span className="ms-1 align-middle"><OwnerBadge /></span>}</Td><Td>{t.admin.stock.sourceTypes[move.source_type as keyof typeof t.admin.stock.sourceTypes] ?? move.source_type}</Td><Td>{n(formatNum(move.qty, { maximumFractionDigits: 3 }))}</Td><Td>{move.unit_cost == null ? '—' : formatCurrency(move.unit_cost, currency)}</Td></tr>)}</tbody></table>{filteredMoves.length === 0 && <Empty label={t.common.noResults} />}</div>
           </ReportCard>}
           {tab === 'charges' && <ReportCard title={t.admin.reports.charges} onExport={exportCharges} exportLabel={t.admin.reports.export}>
+            {chargesError ? <p className="text-sm text-bad text-center py-6">{chargesError}</p> : (<>
             <div className="flex gap-2 mb-3 flex-wrap">
               {(['all', 'pending', 'paid', 'waived'] as ChargeStatusFilter[]).map((value) => (
                 <button key={value} onClick={() => setChargeStatusFilter(value)} className={`px-3 py-1.5 rounded-lg text-sm ${chargeStatusFilter === value ? 'bg-accent text-white' : 'bg-app text-muted'}`}>
@@ -252,6 +257,8 @@ export function ReportsPage() {
               <SummaryCard label={t.admin.reports.chargesWaived} amount={chargesTotalsData.waived.sum} count={chargesTotalsData.waived.count} currency={currency} tone="muted" />
             </div>
             <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><Th>{t.admin.reports.chargesDate}</Th><Th>{t.admin.reports.chargesApartment}</Th><Th>{t.admin.reports.chargesItem}</Th><Th>{t.admin.reports.chargesKind}</Th><Th>{t.admin.reports.chargesQty}</Th><Th>{t.admin.reports.chargesTenant}</Th><Th>{t.admin.reports.chargesBaseCost}</Th><Th>{t.admin.reports.chargesCoef}</Th><Th>{t.admin.reports.chargesAmount}</Th><Th>{t.admin.reports.chargesStatus}</Th></tr></thead><tbody>{filteredCharges.map((row) => <tr key={row.incident_id} className="border-t border-line"><Td>{formatDateTime(row.date)}</Td><Td>{row.apartment_code}{row.owner_code != null && <span className="ms-1 align-middle"><OwnerBadge /></span>}</Td><Td>{row.item_name}</Td><Td>{row.kind}</Td><Td>{n(formatNum(row.qty, { maximumFractionDigits: 3 }))}</Td><Td>{row.tenant_note ?? '—'}</Td><Td>{formatCurrency(row.base_cost, currency)}</Td><Td>{n(formatNum(row.coef, { maximumFractionDigits: 3 }))}</Td><Td>{formatCurrency(row.amount, currency)}</Td><Td>{row.status === 'pending' ? t.admin.reports.chargesPending : row.status === 'paid' ? t.admin.reports.chargesPaid : t.admin.reports.chargesWaived}</Td></tr>)}</tbody></table>{filteredCharges.length === 0 && <Empty label={t.admin.reports.chargesEmpty} />}</div>
+          
+            </>)}
           </ReportCard>}
         </>
       )}
