@@ -17,6 +17,7 @@ import { toast, errorMessage } from '@/lib/toast'
 import { useLiveRefresh } from '@/lib/realtime'
 import { ArrowLeft, Printer, Upload, Trash2, FileText, Loader as Loader2 } from 'lucide-react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { OwnerBadge } from '@/components/OwnerBadge'
 
 interface DocMoveRow {
   id: number
@@ -34,6 +35,8 @@ interface DocMoveRow {
   item_base_unit: BaseUnit
   item_pack_size: number
   item_pack_label: string
+  owner_apartment_id: number | null
+  owner_code: string | null
 }
 
 export function DocumentDetailPage() {
@@ -171,6 +174,15 @@ export function DocumentDetailPage() {
     )
   }
 
+  const locLabel = (location?: { name: string; type: string }) => {
+    if (!location) return '—'
+    if (location.type === 'owner_stock') {
+      const code = location.name.replace(/^Owner:\s*/, '')
+      return t.admin.stock.ownerWarehouseCode.replace('{{code}}', code)
+    }
+    return location.name
+  }
+
   return (
     <div className="px-4 pt-5 pb-28 lg:px-0 lg:pt-0">
       <div className="flex items-center gap-3 mb-4 no-print">
@@ -278,8 +290,14 @@ export function DocumentDetailPage() {
                     {mv.unit_cost != null && ` · ${n(String(mv.unit_cost))} EGP`}
                   </div>
                   <div className="text-xs text-muted">
-                    {mv.from_location?.name ?? '—'} → {mv.to_location?.name ?? '—'}
+                    {locLabel(mv.from_location)} → {locLabel(mv.to_location)}
                   </div>
+                  {mv.owner_code && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <OwnerBadge />
+                      <span className="text-xs text-muted">{mv.owner_code}</span>
+                    </div>
+                  )}
                   {mv.note && <div className="text-xs text-muted">{mv.note}</div>}
                 </div>
               </div>

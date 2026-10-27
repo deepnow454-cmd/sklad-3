@@ -422,6 +422,11 @@ export const ar: Dict = {
       author: 'المنفذ',
       loadMore: 'حمّل أكتر',
       sourceTypes: { opening: 'رصيد افتتاحي', manual: 'عملية يدوية', cleaning: 'نظافة', cleaning_reversal: 'إلغاء نظافة', incident: 'طلب', receipt: 'استلام', issue: 'صرف', writeoff: 'خصم', inventory_adjust: 'تسوية جرد', doc_void: 'إلغاء مستند' },
+      tabCompany: 'مخزن الشركة',
+      tabOwner: 'مخزن المالك',
+      ownerEmpty: 'مفيش ممتلكات ملاك في المخزن',
+      ownerWarehouse: 'مخزن المالك',
+      ownerWarehouseCode: 'مخزن المالك · {{code}}',
     },
     move: {
       title: 'عملية جديدة',

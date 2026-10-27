@@ -31,6 +31,7 @@ import type {
   RecalculateCleaningResult,
   ApproveIncidentResult,
   NormalizedShortageEvent,
+  OwnerStockRow,
   AptType,
 } from '@/lib/database.types'
 
@@ -106,6 +107,17 @@ export async function fetchWarehouseStock(): Promise<WarehouseStockRow[]> {
 
 export const fetchReportWarehouseStock = fetchWarehouseStock
 
+export async function fetchOwnerStock(): Promise<OwnerStockRow[]> {
+  return fetchAllPages<OwnerStockRow>((from, to) =>
+    supabase
+      .from('owner_stock_balance')
+      .select('apartment_id,code,item_id,name,base_unit,qty')
+      .order('code')
+      .order('name')
+      .range(from, to),
+  )
+}
+
 export async function fetchReportStockMoves(fromISO: string, toISO: string): Promise<ReportStockMoveRow[]> {
   const rows = await fetchAllPages<StockMoveRow & { moved_at: string }>((from, to) =>
     supabase
@@ -171,7 +183,7 @@ export async function fetchReportStockMoves(fromISO: string, toISO: string): Pro
 export async function fetchStockMoves(itemId: number, offset = 0): Promise<StockMoveRow[]> {
   const { data, error, status } = await supabase
     .from('stock_moves')
-    .select('id,item_id,from_loc,to_loc,qty,unit_cost,source_type,source_id,apartment_id,staff_id,note,moved_at,created_by')
+    .select('id,item_id,from_loc,to_loc,qty,unit_cost,source_type,source_id,apartment_id,owner_apartment_id,staff_id,note,moved_at,created_by')
     .eq('item_id', itemId)
     .order('moved_at', { ascending: false })
     .order('id', { ascending: false })
@@ -192,11 +204,19 @@ export async function fetchStockMoves(itemId: number, offset = 0): Promise<Stock
 
   const locationMap = new Map(allLocations.map((location) => [location.id, location]))
   const profileMap = new Map(allProfiles.map((profile) => [profile.id, profile.full_name || profile.login]))
+  const ownerIds = Array.from(new Set(rows.map((row) => row.owner_apartment_id).filter((id): id is number => id !== null)))
+  const ownerResults = ownerIds.length
+    ? await Promise.all(chunk(ownerIds).map((batch) => supabase.from('apartments').select('id,code').in('id', batch)))
+    : []
+  for (const r of ownerResults) if (r.error) throw toApiError(r.error, r.status)
+  const ownerMap = new Map(ownerResults.flatMap((r) => (r.data ?? []).map((a: { id: number; code: string }) => [a.id, a.code])))
+
   return rows.map(({ created_by: createdBy, ...row }) => ({
     ...row,
     from_location: locationMap.get(row.from_loc),
     to_location: locationMap.get(row.to_loc),
     author: createdBy ? profileMap.get(createdBy) ?? null : null,
+    owner_code: row.owner_apartment_id == null ? null : ownerMap.get(row.owner_apartment_id) ?? null,
   }))
 }
 
@@ -390,6 +410,7 @@ export async function postDocument(params: {
   supplier?: number | null
   note?: string | null
   doc_date?: string | null
+  ownerApartment?: number | null
 }): Promise<PostDocumentResult> {
   const { data, error, status } = await supabase.rpc('post_document', {
     p_op: params.op,
@@ -400,6 +421,7 @@ export async function postDocument(params: {
     p_note: params.note ?? null,
     // дата передаётся только для операции задним числом: так форма продолжает работать и до обновления базы
     ...(params.doc_date ? { p_doc_date: params.doc_date } : {}),
+    ...(params.ownerApartment != null ? { p_owner_apartment: params.ownerApartment } : {}),
   })
   if (error) throw toApiError(error, status)
   return data as PostDocumentResult
@@ -645,7 +667,7 @@ export async function voidDocument(docId: string, reason: string | null): Promis
 export async function fetchDocumentMoves(docId: string): Promise<Array<StockMoveRow & { item_name: string; item_base_unit: string; item_pack_size: number; item_pack_label: string }>> {
   const { data, error, status } = await supabase
     .from('stock_moves')
-    .select('id,item_id,from_loc,to_loc,qty,unit_cost,source_type,source_id,apartment_id,staff_id,note,moved_at')
+    .select('id,item_id,from_loc,to_loc,qty,unit_cost,source_type,source_id,apartment_id,owner_apartment_id,staff_id,note,moved_at')
     .eq('doc_id', docId)
     .order('moved_at', { ascending: false })
     .order('id', { ascending: false })
@@ -653,15 +675,19 @@ export async function fetchDocumentMoves(docId: string): Promise<Array<StockMove
   const rows = (data ?? []) as StockMoveRow[]
   const itemIds = Array.from(new Set(rows.map((r) => r.item_id)))
   const locationIds = Array.from(new Set(rows.flatMap((r) => [r.from_loc, r.to_loc])))
+  const ownerIds = Array.from(new Set(rows.map((r) => r.owner_apartment_id).filter((id): id is number => id !== null)))
 
-  const [itemsResults, locationsResults] = await Promise.all([
+  const [itemsResults, locationsResults, ownerResults] = await Promise.all([
     itemIds.length ? Promise.all(chunk(itemIds).map((batch) => supabase.from('items').select('id,name,base_unit,pack_size,pack_label').in('id', batch))) : [],
     locationIds.length ? Promise.all(chunk(locationIds).map((batch) => supabase.from('locations').select('id,name,type').in('id', batch))) : [],
+    ownerIds.length ? Promise.all(chunk(ownerIds).map((batch) => supabase.from('apartments').select('id,code').in('id', batch))) : [],
   ])
   for (const r of itemsResults) if (r.error) throw toApiError(r.error, r.status)
   for (const r of locationsResults) if (r.error) throw toApiError(r.error, r.status)
+  for (const r of ownerResults) if (r.error) throw toApiError(r.error, r.status)
   const allItems = itemsResults.flatMap((r) => r.data ?? [])
   const allLocations = locationsResults.flatMap((r) => r.data ?? [])
+  const ownerMap = new Map(ownerResults.flatMap((r) => (r.data ?? []).map((a: { id: number; code: string }) => [a.id, a.code])))
 
   const itemMap = new Map(allItems.map((i) => [i.id, i]))
   const locationMap = new Map(allLocations.map((l) => [l.id, l]))
@@ -675,6 +701,7 @@ export async function fetchDocumentMoves(docId: string): Promise<Array<StockMove
       item_base_unit: item?.base_unit ?? 'pcs',
       item_pack_size: item?.pack_size ?? 1,
       item_pack_label: item?.pack_label ?? '',
+      owner_code: r.owner_apartment_id == null ? null : ownerMap.get(r.owner_apartment_id) ?? null,
     }
   })
 }

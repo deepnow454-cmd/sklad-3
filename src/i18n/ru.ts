@@ -419,6 +419,11 @@ export const ru = {
       author: 'Автор',
       loadMore: 'Загрузить ещё',
       sourceTypes: { opening: 'Начальный остаток', manual: 'Ручная операция', cleaning: 'Уборка', cleaning_reversal: 'Отмена уборки', incident: 'Заявка', receipt: 'Приход', issue: 'Выдача', writeoff: 'Списание', inventory_adjust: 'Инвентаризация', doc_void: 'Отмена документа' },
+      tabCompany: 'Склад компании',
+      tabOwner: 'Склад owner',
+      ownerEmpty: 'На складе нет имущества собственников',
+      ownerWarehouse: 'Склад owner',
+      ownerWarehouseCode: 'Склад owner · {{code}}',
     },
     move: {
       title: 'Новая операция',

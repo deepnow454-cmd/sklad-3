@@ -421,6 +421,11 @@ export const en: Dict = {
       author: 'Author',
       loadMore: 'Load more',
       sourceTypes: { opening: 'Opening balance', manual: 'Manual operation', cleaning: 'Cleaning', cleaning_reversal: 'Cleaning reversal', incident: 'Request', receipt: 'Receipt', issue: 'Issue', writeoff: 'Write-off', inventory_adjust: 'Inventory adjustment', doc_void: 'Document void' },
+      tabCompany: 'Company stock',
+      tabOwner: 'Owner stock',
+      ownerEmpty: 'No owner property on stock',
+      ownerWarehouse: 'Owner stock',
+      ownerWarehouseCode: 'Owner stock · {{code}}',
     },
     move: {
       title: 'New operation',

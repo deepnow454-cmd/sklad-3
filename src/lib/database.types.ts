@@ -4,7 +4,7 @@ export type AppRole = 'admin' | 'supervisor' | 'manager'
 export type AptType = 'studio' | '1br' | '2br'
 export type ItemKind = 'asset' | 'consumable'
 export type BaseUnit = 'pcs' | 'g' | 'ml'
-export type LocType = 'warehouse' | 'apartment' | 'holder' | 'sink' | 'source'
+export type LocType = 'warehouse' | 'apartment' | 'holder' | 'sink' | 'source' | 'owner_stock'
 export type NormType = 'asset_standing' | 'turnover_replenish' | 'cleaning_consumption'
 export type EventStatus = 'done' | 'reversed'
 export type IncidentKind = 'breakdown' | 'broken' | 'lost' | 'damaged' | 'other'
@@ -278,12 +278,14 @@ export interface StockMoveRow {
   source_type: string
   source_id: string | null
   apartment_id: number | null
+  owner_apartment_id: number | null
   staff_id: number | null
   note: string | null
   moved_at: string
   from_location?: { name: string; type: LocType }
   to_location?: { name: string; type: LocType }
   author?: string | null
+  owner_code?: string | null
 }
 
 export interface NormRuleRow {
@@ -383,4 +385,13 @@ export interface NormalizedShortageEvent {
   type: string
   created_at: string
   items: NormalizedShortageItem[]
+}
+
+export interface OwnerStockRow {
+  apartment_id: number
+  code: string
+  item_id: number
+  name: string
+  base_unit: BaseUnit
+  qty: number
 }
