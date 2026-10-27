@@ -258,6 +258,24 @@ export interface ReportStockMoveRow {
   /** +1: движение в «списано» (расход), -1: возврат из «списано», 0: не расход */
   sink_flow: 1 | -1 | 0
   moved_at: string
+  owner_apartment_id: number | null
+  owner_code: string | null
+}
+
+export interface ChargesReportRow {
+  incident_id: string
+  date: string
+  apartment_code: string
+  item_name: string
+  kind: string
+  qty: number
+  tenant_note: string | null
+  base_cost: number
+  base_source: 'company' | 'owner' | 'manual'
+  coef: number
+  amount: number
+  status: ChargeStatus
+  owner_code: string | null
 }
 
 export interface ToOrderRow {

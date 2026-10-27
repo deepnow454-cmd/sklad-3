@@ -36,6 +36,7 @@ import type {
   IncidentCharge,
   IncidentChargePreview,
   ChargeStatus,
+  ChargesReportRow,
 } from '@/lib/database.types'
 
 // ---- Queries ----
@@ -125,7 +126,7 @@ export async function fetchReportStockMoves(fromISO: string, toISO: string): Pro
   const rows = await fetchAllPages<StockMoveRow & { moved_at: string }>((from, to) =>
     supabase
       .from('stock_moves')
-      .select('id,item_id,from_loc,to_loc,qty,unit_cost,source_type,apartment_id,moved_at')
+      .select('id,item_id,from_loc,to_loc,qty,unit_cost,source_type,apartment_id,owner_apartment_id,moved_at')
       .gte('moved_at', fromISO)
       .lt('moved_at', toISO)
       .order('moved_at', { ascending: false })
@@ -139,6 +140,7 @@ export async function fetchReportStockMoves(fromISO: string, toISO: string): Pro
 
   const itemIds = Array.from(new Set(rows.map((row) => row.item_id)))
   const apartmentIds = Array.from(new Set(rows.map((row) => row.apartment_id).filter((id): id is number => id !== null)))
+  const ownerIds = Array.from(new Set(rows.map((row) => row.owner_apartment_id).filter((id): id is number => id !== null)))
 
   const itemsResult = itemIds.length
     ? await Promise.all(chunk(itemIds).map((batch) => supabase.from('items').select('id,name,category_id,pack_size,pack_label').in('id', batch)))
@@ -146,8 +148,13 @@ export async function fetchReportStockMoves(fromISO: string, toISO: string): Pro
   const apartmentsResult = apartmentIds.length
     ? await Promise.all(chunk(apartmentIds).map((batch) => supabase.from('apartments').select('id,code').in('id', batch)))
     : []
+  const ownerAptIds = Array.from(new Set([...apartmentIds, ...ownerIds]))
+  const ownerAptResult = ownerAptIds.length
+    ? await Promise.all(chunk(ownerAptIds).map((batch) => supabase.from('apartments').select('id,code').in('id', batch)))
+    : []
   for (const r of itemsResult) if (r.error) throw toApiError(r.error, r.status)
   for (const r of apartmentsResult) if (r.error) throw toApiError(r.error, r.status)
+  for (const r of ownerAptResult) if (r.error) throw toApiError(r.error, r.status)
 
   const allItems = itemsResult.flatMap((r) => r.data ?? [])
   const allApartments = apartmentsResult.flatMap((r) => r.data ?? [])
@@ -162,6 +169,7 @@ export async function fetchReportStockMoves(fromISO: string, toISO: string): Pro
   const itemMap = new Map(allItems.map((item) => [item.id, item]))
   const categoryMap = new Map(allCategories.map((category) => [category.id, category.name]))
   const apartmentMap = new Map(allApartments.map((apartment) => [apartment.id, apartment.code]))
+  const ownerAptMap = new Map(ownerAptResult.flatMap((r) => (r.data ?? []).map((a: { id: number; code: string }) => [a.id, a.code])))
 
   return rows.map((row) => {
     const item = itemMap.get(row.item_id)
@@ -179,6 +187,68 @@ export async function fetchReportStockMoves(fromISO: string, toISO: string): Pro
       apartment_code: row.apartment_id == null ? null : apartmentMap.get(row.apartment_id) ?? '—',
       sink_flow: sinkId == null ? 0 : row.to_loc === sinkId ? 1 : row.from_loc === sinkId ? -1 : 0,
       moved_at: row.moved_at,
+      owner_apartment_id: row.owner_apartment_id,
+      owner_code: row.owner_apartment_id == null ? null : ownerAptMap.get(row.owner_apartment_id) ?? null,
+    }
+  })
+}
+
+export async function fetchChargesReport(fromISO: string, toISO: string): Promise<ChargesReportRow[]> {
+  const rawCharges = await fetchAllPages<Record<string, unknown>>((from, to) =>
+    supabase
+      .from('incident_charges')
+      .select('incident_id,tenant_note,base_cost,base_source,coef,amount,status,created_at')
+      .gte('created_at', fromISO)
+      .lt('created_at', toISO)
+      .order('created_at', { ascending: false })
+      .range(from, to),
+  )
+
+  if (rawCharges.length === 0) return []
+
+  const incidentIds = rawCharges.map((r) => String(r.incident_id))
+  const incidentResults = await Promise.all(
+    chunk(incidentIds).map((batch) =>
+      supabase.from('incidents').select('id,apartment_id,item_id,kind,qty,free_text').in('id', batch),
+    ),
+  )
+  for (const r of incidentResults) if (r.error) throw toApiError(r.error, r.status)
+  const allIncidents = incidentResults.flatMap((r) => r.data ?? [])
+
+  const apartmentIds = Array.from(new Set(allIncidents.map((inc) => inc.apartment_id).filter((id): id is number => id != null)))
+  const itemIds = Array.from(new Set(allIncidents.map((inc) => inc.item_id).filter((id): id is number => id != null)))
+
+  const apartmentResults = apartmentIds.length
+    ? await Promise.all(chunk(apartmentIds).map((batch) => supabase.from('apartments').select('id,code,is_owner').in('id', batch)))
+    : []
+  for (const r of apartmentResults) if (r.error) throw toApiError(r.error, r.status)
+  const itemResults = itemIds.length
+    ? await Promise.all(chunk(itemIds).map((batch) => supabase.from('items').select('id,name').in('id', batch)))
+    : []
+  for (const r of itemResults) if (r.error) throw toApiError(r.error, r.status)
+
+  const aptMap = new Map(apartmentResults.flatMap((r) => (r.data ?? []).map((a: { id: number; code: string; is_owner: boolean }) => [a.id, a])))
+  const itemMap = new Map(itemResults.flatMap((r) => (r.data ?? []).map((it: { id: number; name: string }) => [it.id, it.name])))
+  const incMap = new Map(allIncidents.map((inc) => [String(inc.id), inc]))
+
+  return rawCharges.map((r) => {
+    const inc = incMap.get(String(r.incident_id))
+    const apt = inc ? aptMap.get(inc.apartment_id) : undefined
+    const itemName = inc?.item_id != null ? (itemMap.get(inc.item_id) ?? '—') : (inc?.free_text ?? '—')
+    return {
+      incident_id: String(r.incident_id),
+      date: String(r.created_at),
+      apartment_code: apt?.code ?? '—',
+      item_name: itemName,
+      kind: String(inc?.kind ?? '—'),
+      qty: Number(inc?.qty ?? 0),
+      tenant_note: (r.tenant_note as string | null) ?? null,
+      base_cost: Number(r.base_cost),
+      base_source: r.base_source as 'company' | 'owner' | 'manual',
+      coef: Number(r.coef),
+      amount: Number(r.amount),
+      status: r.status as ChargeStatus,
+      owner_code: (r.base_source === 'owner' && apt?.code) ? apt.code : null,
     }
   })
 }
